@@ -1,3 +1,7 @@
+data/enriched*
+data/genbank
+data/Zhiyuan
+data/dataset
 data/test/genome/STAR_DIR
 data/test/sample1/star
 data/test/sample1/log
