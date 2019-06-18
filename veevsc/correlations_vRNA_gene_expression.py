@@ -54,9 +54,6 @@ if __name__ == '__main__':
     times = np.array([0.5, 1.5, 4, 6, 12, 24])
     ds.samplesheet['time [h]'] = times[ds.samplesheet['time_index']]
 
-    sys.exit()
-
-
     ds.query_samples_by_metadata('coverage >= 100000', inplace=True)
 
     ds.counts.normalize('counts_per_million', inplace=True)
@@ -110,6 +107,57 @@ if __name__ == '__main__':
         ax.set_ylabel('{:} expression [cpm]'.format(gene))
 
     fig.tight_layout()
+
+    print('Plot histograms as they change for increasing mean expression')
+    ge_mean = ds.counts.get_statistics(metrics=('mean',)).iloc[:, 0]
+    bins_me = np.array([0, 0.01, 0.5, 1, 3, 10, 30, 100, 300, 1000, 3000, 100000])
+    bins_corr = np.array([-0.5, -0.4, -0.3, -0.25, -0.2, -0.15, -0.1, -0.05, -0.015, 0.015, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5])
+    hs = np.histogram2d(
+            ge_mean.values, corr.values,
+            bins=[bins_me, bins_corr],
+            )[0]
+    fig, ax = plt.subplots(figsize=(5, 4))
+    colors = sns.color_palette('husl', n_colors=len(hs))
+    line = [[], []]
+    for i in range(len(hs)):
+        bl, br = bins_me[i: i+2]
+        left = bins_corr[:-1]
+        width = bins_corr[1:] - bins_corr[:-1]
+        b = (len(hs) - 1 - i) * 0.5
+        h = 1.0 * hs[i] / sum(hs[i])
+        if bl >= 1:
+            bl = int(bl)
+        if br >= 1:
+            br = int(br)
+        label = '[{:}, {:}]'.format(bl, br)
+        ind = (ge_mean.values >= bl) & (ge_mean.values < br)
+        em = corr.values[ind].mean()
+        line[0].append(em)
+        line[1].append(b + h.max())
+        ax.bar(
+            left, h, width=width, bottom=b,
+            align='edge',
+            color=colors[i], alpha=0.5, label=label)
+    # average line and arrow
+    ax.plot(line[0][:-1], line[1][:-1], color='k', lw=2, alpha=0.5)
+    ax.arrow(
+            line[0][-2], line[1][-2],
+            line[0][-1] - line[0][-2], line[1][-1] - line[1][-2],
+            length_includes_head=True,
+            color='k',
+            alpha=0.5,
+            lw=2,
+            head_width=0.02,
+            head_length=0.08,
+            )
+    ax.grid(True)
+    ax.set_xlabel('Correlation between vRNA and gene expression')
+    ax.legend(title='Mean expression:')
+    ax.set_yticklabels(['' for tk in ax.get_yticklabels()])
+    fig.tight_layout()
+
+
+    sys.exit()
 
 
     print('Plot a few more examples')
@@ -184,6 +232,81 @@ if __name__ == '__main__':
     ax.grid(True)
     ax.set_xlabel('vRNA [cpm]')
     ax.set_ylabel('{:} expression [cpm]'.format(gene))
+
+    fig.tight_layout()
+
+    print('Cross-check the list with controls')
+    dsc = ds.query_samples_by_metadata('MOI == 0')
+    corr0 = dsc.correlation.correlate_features_phenotypes('time [h]').fillna(0)
+    corr0.name = 'control with time'
+
+    df = pd.concat([corr, corr0], axis=1)
+    df.rename(columns={'correlation': 'vRNA'}, inplace=True)
+
+    fig = plt.figure(figsize=(6.2, 5.8))
+    gs = fig.add_gridspec(2, 2, width_ratios=[3, 1], height_ratios=[1, 3])
+    ax = fig.add_subplot(gs[1, 0])
+    x = df['vRNA'].values
+    y = df['control with time'].values
+    r = np.sqrt(x**2 + y**2)
+    ind = ge_mean.values > 0.5
+    ax.scatter(x[ind], y[ind], alpha=0.2)
+    sns.kdeplot(x[ind], y[ind], ax=ax, n_levels=30)
+    ax.set_xlabel('corr with vRNA')
+    ax.set_ylabel('corr with time [MOI = 0]')
+    ax.grid()
+
+    xmax = np.abs(df.values).max() * 1.1
+    ax.plot([-xmax, xmax], [-xmax, xmax], lw=1.5, color='k', alpha=0.5)
+    ax.set_xlim(-xmax, xmax)
+    ax.set_ylim(-xmax, xmax)
+
+    # Get averages by window
+    bins = np.linspace(-0.45, 0.25, 50)
+    overlap = 3
+    left = bins[:-overlap]
+    right = bins[overlap:]
+    ym = []
+    for l, r in zip(left, right):
+        i = (x >= l) & (x < r)
+        ym.append(y[i].mean())
+    xm = 0.5 * (left + right)
+    m, q = np.polyfit(xm, ym, 1)
+    xfit = np.linspace(-xmax, xmax, 100)
+    yfit = q + m * xfit
+    ax.plot(xfit, yfit, lw=2, color='darkred', alpha=0.8)
+
+    # Get kde max
+    from scipy.stats import gaussian_kde
+    kernel = gaussian_kde(np.vstack([x[ind], y[ind]]))
+    X, Y = 1.0 * np.mgrid[-40: 40, -40: 40] / 100
+    positions = np.vstack([X.ravel(), Y.ravel()])
+    amax = kernel(positions).argmax()
+    xp, yp = positions[:, amax]
+    ax.scatter(
+            [xp], [yp], marker='o', s=120, lw=2,
+            facecolor='none', edgecolor='darkred', alpha=1.0, zorder=10,
+            )
+
+    fnames = ds.featurenames
+    ipos = (x[ind] > 0.2) & (y[ind] < 0.75 * x[ind])
+    fpos = list(fnames[ind][ipos])
+    ineg = (x[ind] < -0.4) & (y[ind] > 0.75 * x[ind])
+    fneg = list(fnames[ind][ineg])
+    for gene in fpos + fneg:
+        ax.text(df.loc[gene, 'vRNA'], df.loc[gene, 'control with time'],
+                gene, ha='center', va='center')
+
+    # Marginals
+    ax1 = fig.add_subplot(gs[0, 0], sharex=ax)
+    sns.kdeplot(x[ind], ax=ax1)
+    ax1.set_xticklabels(['' for x in ax1.get_xticklabels()])
+    ax1.grid(True)
+
+    ax2 = fig.add_subplot(gs[1, 1], sharey=ax)
+    sns.kdeplot(y[ind], ax=ax2, vertical=True)
+    ax2.set_yticklabels(['' for x in ax2.get_yticklabels()])
+    ax2.grid(True)
 
     fig.tight_layout()
 
