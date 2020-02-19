@@ -1,0 +1,8 @@
+io:
+ datasets:
+  all:
+   path: ../data/all_viruses/all_viruses.loom
+   format: loom
+   axis_samples: columns
+   index_samples: samplename
+   index_features: featurename
